@@ -140,6 +140,41 @@ def get_chroma_client(args=None):
             
     return _chroma_client
 
+##### Parse Tools #####
+
+def _parse_dict_param(value: str | Dict | None, param_name: str) -> Dict | None:
+    """Parse a dict parameter that may come as a JSON string.
+    
+    Agent frameworks pass JSON objects as strings (e.g., '{"$contains": "Python"}'),
+    so we accept string input and parse it into a dict. Dict input is also accepted
+    for backward compatibility with direct Python callers.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError(
+                    f"Parameter '{param_name}' must be a JSON object, "
+                    f"got {type(parsed).__name__}: {value}"
+                )
+            return parsed
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Parameter '{param_name}' is not valid JSON: {value}. "
+                f"Error: {str(e)}"
+            ) from e
+    raise ValueError(
+        f"Parameter '{param_name}' must be a dict or JSON string, "
+        f"got {type(value).__name__}"
+    )
+
 ##### Collection Tools #####
 
 @mcp.tool()
@@ -180,15 +215,16 @@ mcp_known_embedding_functions: Dict[str, EmbeddingFunction] = {
 async def chroma_create_collection(
     collection_name: str,
     embedding_function_name: str = "default",
-    metadata: Dict | None = None,
+    metadata: str | Dict | None = None,
 ) -> str:
     """Create a new Chroma collection with configurable HNSW parameters.
     
     Args:
         collection_name: Name of the collection to create
         embedding_function_name: Name of the embedding function to use. Options: 'default', 'cohere', 'openai', 'jina', 'voyageai', 'ollama', 'roboflow'
-        metadata: Optional metadata dict to add to the collection
+        metadata: Optional metadata dict as a JSON string or Dict (e.g., '{"key": "value"}' or {"key": "value"})
     """
+    metadata = _parse_dict_param(metadata, "metadata")
     client = get_chroma_client()
     
     embedding_function = mcp_known_embedding_functions[embedding_function_name]
@@ -270,15 +306,16 @@ async def chroma_get_collection_count(collection_name: str) -> int:
 async def chroma_modify_collection(
     collection_name: str,
     new_name: str | None = None,
-    new_metadata: Dict | None = None,
+    new_metadata: str | Dict | None = None,
 ) -> str:
     """Modify a Chroma collection's name or metadata.
     
     Args:
         collection_name: Name of the collection to modify
         new_name: Optional new name for the collection
-        new_metadata: Optional new metadata for the collection
+        new_metadata: Optional new metadata for the collection as a JSON string or Dict
     """
+    new_metadata = _parse_dict_param(new_metadata, "new_metadata")
     client = get_chroma_client()
     try:
         collection = client.get_collection(collection_name)
@@ -328,13 +365,42 @@ async def chroma_delete_collection(collection_name: str) -> str:
     except Exception as e:
         raise Exception(f"Failed to delete collection '{collection_name}': {str(e)}") from e
 
-##### Document Tools #####
+
+def _parse_list_dict_param(value: str | List[Dict] | None, param_name: str) -> List[Dict] | None:
+    """Parse a list-of-dicts parameter that may come as a JSON string."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+            if not isinstance(parsed, list):
+                raise ValueError(
+                    f"Parameter '{param_name}' must be a JSON array, "
+                    f"got {type(parsed).__name__}: {value}"
+                )
+            return parsed
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Parameter '{param_name}' is not valid JSON: {value}. "
+                f"Error: {str(e)}"
+            ) from e
+    raise ValueError(
+        f"Parameter '{param_name}' must be a list or JSON string, "
+        f"got {type(value).__name__}"
+    )
+
+
 @mcp.tool()
 async def chroma_add_documents(
     collection_name: str,
     documents: List[str],
     ids: List[str],
-    metadatas: List[Dict] | None = None
+    metadatas: str | List[Dict] | None = None
 ) -> str:
     """Add documents to a Chroma collection.
     
@@ -342,8 +408,10 @@ async def chroma_add_documents(
         collection_name: Name of the collection to add documents to
         documents: List of text documents to add
         ids: List of IDs for the documents (required)
-        metadatas: Optional list of metadata dictionaries for each document
+        metadatas: Optional list of metadata dictionaries as a JSON string or List[Dict]
+                   (e.g., '[{"key": "value"}]' or [{"key": "value"}])
     """
+    metadatas = _parse_list_dict_param(metadatas, "metadatas")
     if not documents:
         raise ValueError("The 'documents' list cannot be empty.")
     
@@ -397,8 +465,8 @@ async def chroma_query_documents(
     collection_name: str,
     query_texts: List[str],
     n_results: int = 5,
-    where: Dict | None = None,
-    where_document: Dict | None = None,
+    where: str | Dict | None = None,
+    where_document: str | Dict | None = None,
     include: List[str] = ["documents", "metadatas", "distances"]
 ) -> Dict:
     """Query documents from a Chroma collection with advanced filtering.
@@ -407,24 +475,27 @@ async def chroma_query_documents(
         collection_name: Name of the collection to query
         query_texts: List of query texts to search for
         n_results: Number of results to return per query
-        where: Optional metadata filters using Chroma's query operators
+        where: Optional metadata filters as a JSON string or Dict using Chroma's query operators
                Examples:
-               - Simple equality: {"metadata_field": "value"}
-               - Comparison: {"metadata_field": {"$gt": 5}}
-               - Logical AND: {"$and": [{"field1": {"$eq": "value1"}}, {"field2": {"$gt": 5}}]}
-               - Logical OR: {"$or": [{"field1": {"$eq": "value1"}}, {"field1": {"$eq": "value2"}}]}
-        where_document: Optional document content filters
+               - Simple equality: '{"metadata_field": "value"}' or {"metadata_field": "value"}
+               - Comparison: '{"metadata_field": {"$gt": 5}}'
+               - Logical AND: '{"$and": [{"field1": {"$eq": "value1"}}, {"field2": {"$gt": 5}}]}'
+               - Logical OR: '{"$or": [{"field1": {"$eq": "value1"}}, {"field1": {"$eq": "value2"}}]}'
+        where_document: Optional document content filters as a JSON string or Dict
                Examples:
-               - Contains: {"$contains": "value"}
-               - Not contains: {"$not_contains": "value"}
-               - Regex: {"$regex": "[a-z]+"}
-               - Not regex: {"$not_regex": "[a-z]+"}
-               - Logical AND: {"$and": [{"$contains": "value1"}, {"$not_regex": "[a-z]+"}]}
-               - Logical OR: {"$or": [{"$regex": "[a-z]+"}, {"$not_contains": "value2"}]}
+               - Contains: '{"$contains": "value"}'
+               - Not contains: '{"$not_contains": "value"}'
+               - Regex: '{"$regex": "[a-z]+"}'
+               - Not regex: '{"$not_regex": "[a-z]+"}'
+               - Logical AND: '{"$and": [{"$contains": "value1"}, {"$not_regex": "[a-z]+"}]}'
+               - Logical OR: '{"$or": [{"$regex": "[a-z]+"}, {"$not_contains": "value2"}]}'
         include: List of what to include in response. By default, this will include documents, metadatas, and distances.
     """
     if not query_texts:
         raise ValueError("The 'query_texts' list cannot be empty.")
+
+    where = _parse_dict_param(where, "where")
+    where_document = _parse_dict_param(where_document, "where_document")
 
     client = get_chroma_client()
     try:
@@ -443,8 +514,8 @@ async def chroma_query_documents(
 async def chroma_get_documents(
     collection_name: str,
     ids: List[str] | None = None,
-    where: Dict | None = None,
-    where_document: Dict | None = None,
+    where: str | Dict | None = None,
+    where_document: str | Dict | None = None,
     include: List[str] = ["documents", "metadatas"],
     limit: int | None = None,
     offset: int | None = None
@@ -454,20 +525,20 @@ async def chroma_get_documents(
     Args:
         collection_name: Name of the collection to get documents from
         ids: Optional list of document IDs to retrieve
-        where: Optional metadata filters using Chroma's query operators
+        where: Optional metadata filters as a JSON string or Dict using Chroma's query operators
                Examples:
-               - Simple equality: {"metadata_field": "value"}
-               - Comparison: {"metadata_field": {"$gt": 5}}
-               - Logical AND: {"$and": [{"field1": {"$eq": "value1"}}, {"field2": {"$gt": 5}}]}
-               - Logical OR: {"$or": [{"field1": {"$eq": "value1"}}, {"field1": {"$eq": "value2"}}]}
-        where_document: Optional document content filters
+               - Simple equality: '{"metadata_field": "value"}' or {"metadata_field": "value"}
+               - Comparison: '{"metadata_field": {"$gt": 5}}'
+               - Logical AND: '{"$and": [{"field1": {"$eq": "value1"}}, {"field2": {"$gt": 5}}]}'
+               - Logical OR: '{"$or": [{"field1": {"$eq": "value1"}}, {"field1": {"$eq": "value2"}}]}'
+        where_document: Optional document content filters as a JSON string or Dict
                Examples:
-               - Contains: {"$contains": "value"}
-               - Not contains: {"$not_contains": "value"}
-               - Regex: {"$regex": "[a-z]+"}
-               - Not regex: {"$not_regex": "[a-z]+"}
-               - Logical AND: {"$and": [{"$contains": "value1"}, {"$not_regex": "[a-z]+"}]}
-               - Logical OR: {"$or": [{"$regex": "[a-z]+"}, {"$not_contains": "value2"}]}
+               - Contains: '{"$contains": "value"}'
+               - Not contains: '{"$not_contains": "value"}'
+               - Regex: '{"$regex": "[a-z]+"}'
+               - Not regex: '{"$not_regex": "[a-z]+"}'
+               - Logical AND: '{"$and": [{"$contains": "value1"}, {"$not_regex": "[a-z]+"}]}'
+               - Logical OR: '{"$or": [{"$regex": "[a-z]+"}, {"$not_contains": "value2"}]}'
         include: List of what to include in response. By default, this will include documents, and metadatas.
         limit: Optional maximum number of documents to return
         offset: Optional number of documents to skip before returning results
@@ -475,6 +546,8 @@ async def chroma_get_documents(
     Returns:
         Dictionary containing the matching documents, their IDs, and requested includes
     """
+    where = _parse_dict_param(where, "where")
+    where_document = _parse_dict_param(where_document, "where_document")
     client = get_chroma_client()
     try:
         collection = client.get_collection(collection_name)
@@ -494,7 +567,7 @@ async def chroma_update_documents(
     collection_name: str,
     ids: List[str],
     embeddings: List[List[float]] | None = None,
-    metadatas: List[Dict] | None = None,
+    metadatas: str | List[Dict] | None = None,
     documents: List[str] | None = None
 ) -> str:
     """Update documents in a Chroma collection.
@@ -504,8 +577,8 @@ async def chroma_update_documents(
         ids: List of document IDs to update (required)
         embeddings: Optional list of new embeddings for the documents.
                     Must match length of ids if provided.
-        metadatas: Optional list of new metadata dictionaries for the documents.
-                   Must match length of ids if provided.
+        metadatas: Optional list of new metadata dictionaries as a JSON string or List[Dict]
+                   (e.g., '[{"key": "value"}]' or [{"key": "value"}]). Must match length of ids if provided.
         documents: Optional list of new text documents.
                    Must match length of ids if provided.
 
@@ -518,6 +591,7 @@ async def chroma_update_documents(
                     update lists does not match the length of 'ids'.
         Exception: If the collection does not exist or if the update operation fails.
     """
+    metadatas = _parse_list_dict_param(metadatas, "metadatas")
     if not ids:
         raise ValueError("The 'ids' list cannot be empty.")
 
