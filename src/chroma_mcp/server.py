@@ -174,6 +174,35 @@ def _parse_dict_param(value: str | Dict | None, param_name: str) -> Dict | None:
         f"Parameter '{param_name}' must be a dict or JSON string, "
         f"got {type(value).__name__}"
     )
+    
+
+def _parse_list_dict_param(value: str | List[Dict] | None, param_name: str) -> List[Dict] | None:
+    """Parse a list-of-dicts parameter that may come as a JSON string."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+            if not isinstance(parsed, list):
+                raise ValueError(
+                    f"Parameter '{param_name}' must be a JSON array, "
+                    f"got {type(parsed).__name__}: {value}"
+                )
+            return parsed
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Parameter '{param_name}' is not valid JSON: {value}. "
+                f"Error: {str(e)}"
+            ) from e
+    raise ValueError(
+        f"Parameter '{param_name}' must be a list or JSON string, "
+        f"got {type(value).__name__}"
+    )
 
 ##### Collection Tools #####
 
@@ -364,35 +393,6 @@ async def chroma_delete_collection(collection_name: str) -> str:
         return f"Successfully deleted collection {collection_name}"
     except Exception as e:
         raise Exception(f"Failed to delete collection '{collection_name}': {str(e)}") from e
-
-
-def _parse_list_dict_param(value: str | List[Dict] | None, param_name: str) -> List[Dict] | None:
-    """Parse a list-of-dicts parameter that may come as a JSON string."""
-    if value is None:
-        return None
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        try:
-            parsed = json.loads(value)
-            if not isinstance(parsed, list):
-                raise ValueError(
-                    f"Parameter '{param_name}' must be a JSON array, "
-                    f"got {type(parsed).__name__}: {value}"
-                )
-            return parsed
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Parameter '{param_name}' is not valid JSON: {value}. "
-                f"Error: {str(e)}"
-            ) from e
-    raise ValueError(
-        f"Parameter '{param_name}' must be a list or JSON string, "
-        f"got {type(value).__name__}"
-    )
 
 
 @mcp.tool()
